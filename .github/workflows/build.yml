@@ -12,7 +12,7 @@ permissions:
 jobs:
   build:
     name: Build Almas Sales v1.16
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
 
     steps:
@@ -23,45 +23,85 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
-        with:
-          packages: "platform-tools platforms;android-37 build-tools;36.0.0"
-
-      - name: Set up Gradle
+      - name: Set up Gradle 9.6.0
         uses: gradle/actions/setup-gradle@v6
         with:
-          gradle-version: "9.6.0"
+          gradle-version: '9.6.0'
+          cache-provider: basic
 
-      - name: Check project files
+      - name: Locate Android project
+        shell: bash
         run: |
-          echo "Project root:"
-          ls -la
-          echo "App folder:"
-          ls -la app || true
+          SETTINGS_FILE="$(find . -maxdepth 4 -name settings.gradle.kts -print -quit)"
 
-      - name: Build Release APK
-        run: gradle --no-daemon --stacktrace assembleRelease
+          if [ -z "$SETTINGS_FILE" ]; then
+            echo "settings.gradle.kts not found"
+            find . -maxdepth 3 -type f | sort
+            exit 1
+          fi
 
-      - name: Show generated APK files
+          PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Project directory: $PROJECT_DIR"
+
+      - name: Verify required files
+        shell: bash
         run: |
-          find app/build/outputs/apk -type f -name "*.apk" -print
+          set -e
 
-      - name: Prepare final APK
+          test -f "$PROJECT_DIR/app/build.gradle.kts"
+          test -f "$PROJECT_DIR/build.gradle.kts"
+          test -f "$PROJECT_DIR/keystore.properties"
+          test -f "$PROJECT_DIR/almas-release.jks"
+
+          echo "Required project and signing files are present."
+
+          echo "ANDROID_HOME=$ANDROID_HOME"
+
+          test -d "$ANDROID_HOME/platforms/android-37"
+          test -d "$ANDROID_HOME/build-tools/36.0.0"
+
+          gradle --version
+
+      - name: Build signed Release APK
+        shell: bash
         run: |
-          APK_FILE=$(find app/build/outputs/apk/release -type f -name "*.apk" | head -n 1)
+          set -e
+
+          gradle \
+            -p "$PROJECT_DIR" \
+            --no-daemon \
+            --stacktrace \
+            :app:assembleRelease
+
+      - name: Prepare APK artifact
+        shell: bash
+        run: |
+          set -e
+
+          APK_FILE="$(find "$PROJECT_DIR/app/build/outputs/apk/release" \
+            -maxdepth 1 \
+            -type f \
+            -name '*.apk' \
+            ! -name '*unsigned*' \
+            -print -quit)"
 
           if [ -z "$APK_FILE" ]; then
-            echo "Release APK not found"
+            echo "Signed release APK not found"
+            find "$PROJECT_DIR/app/build/outputs" -type f 2>/dev/null | sort || true
             exit 1
           fi
 
           mkdir -p output
-          cp "$APK_FILE" output/Almas-Sales-v1.16.apk
 
-      - name: Upload APK artifact
+          cp "$APK_FILE" \
+            output/Almas-Sales-v1.16.apk
+
+          ls -lh output/Almas-Sales-v1.16.apk
+
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Almas-Sales-v1.16
